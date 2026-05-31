@@ -510,6 +510,7 @@ def upload(topic, video, srt):
         media_body=MediaFileUpload(str(srt), mimetype="application/x-subrip"),
     ).execute()
     print(f"Uploaded: https://www.youtube.com/watch?v={video_id}")
+    return video_id
 
 
 def main():
@@ -520,8 +521,15 @@ def main():
     video_duration = duration(video)
     if not 180 <= video_duration <= 360:
         raise RuntimeError(f"Generated video duration is outside 3-6 minutes: {video_duration:.1f}s")
-    upload(topic, video, srt)
-    history.append({"topic": topic["topic"], "title": topic["title"], "created_at": datetime.now().isoformat(timespec="seconds"), "automated": True})
+    video_id = upload(topic, video, srt)
+    history.append({
+        "topic": topic["topic"],
+        "title": topic["title"],
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "automated": True,
+        "video_id": video_id,
+        "voice_id": os.getenv("ELEVENLABS_VOICE_ID"),
+    })
     save_history(history)
 
 
