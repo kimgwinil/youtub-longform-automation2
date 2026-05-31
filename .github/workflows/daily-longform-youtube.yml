@@ -16,12 +16,13 @@ jobs:
     env:
       ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
       ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+      ELEVENLABS_FALLBACK_VOICE_IDS: airYK6ydeWdrJg6gyZA3
       ELEVENLABS_MODEL: eleven_multilingual_v2
       ELEVENLABS_STABILITY: "0.70"
       ELEVENLABS_SIMILARITY: "0.84"
       ELEVENLABS_STYLE: "0.0"
       ELEVENLABS_SPEAKER_BOOST: "true"
-      ELEVENLABS_SPEED: "0.86"
+      ELEVENLABS_SPEED: "1.0"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -31,7 +32,7 @@ jobs:
       OPENAI_TEXT_MODEL: gpt-4o-mini
       GEMINI_IMAGE_MODEL: gemini-2.5-flash-image
       SCENE_IMAGE_MAX_WORKERS: "4"
-      YOUTUBE_PRIVACY: private
+      YOUTUBE_PRIVACY: public
 
     steps:
       - uses: actions/checkout@v4

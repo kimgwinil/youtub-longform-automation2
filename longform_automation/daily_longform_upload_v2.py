@@ -32,11 +32,12 @@ def generate_topic(history):
                 "content": (
                     "Create one fresh Korean YouTube longform explainer topic as strict JSON. "
                     "Avoid every used topic. The tone should be informative, practical, and suitable for a Korean audience. "
-                    "Fields required: id, topic, title, description, tags, subject, problem, solution. "
+                    "Fields required: id, topic, title, description, tags, subject, problem, solution, example. "
                     "description must include two short paragraphs and 5 Korean hashtags. "
                     "tags must be a list of 5 to 7 Korean strings. "
                     "subject must be an English visual prompt for realistic Korean documentary imagery. "
-                    "problem and solution must be concise Korean phrases.\n\n"
+                    "problem, solution, and example must be concise Korean phrases. "
+                    "example must describe a concrete Korean real-life situation and must not include English.\n\n"
                     f"Used topics:\n{json.dumps(used_topics, ensure_ascii=False)}"
                 ),
             },
@@ -44,7 +45,7 @@ def generate_topic(history):
         temperature=0.85,
     )
     topic = json.loads(response.choices[0].message.content.strip())
-    required = {"id", "topic", "title", "description", "tags", "subject", "problem", "solution"}
+    required = {"id", "topic", "title", "description", "tags", "subject", "problem", "solution", "example"}
     missing = sorted(required - set(topic))
     if missing:
         raise RuntimeError(f"Generated topic is missing fields: {missing}")

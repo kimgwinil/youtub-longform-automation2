@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +33,7 @@ TOPICS = [
         "subject": "Korean student studying late at a desk, tired but focused, realistic documentary style",
         "problem": "공부 시간은 길지만 틀린 문제를 고치는 과정이 부족함",
         "solution": "오답 분석, 간격 복습, 작은 테스트로 피드백 루프를 만드는 것",
+        "example": "공부 시간을 늘렸는데도 같은 유형의 문제를 계속 틀리는 학생",
     },
     {
         "id": "meeting-no-decision",
@@ -42,6 +44,7 @@ TOPICS = [
         "subject": "Korean office meeting room, many documents, people unable to decide, realistic documentary style",
         "problem": "회의 목적, 결정권자, 다음 행동이 불명확함",
         "solution": "회의 전 결정 질문을 정하고 끝에는 담당자와 마감일을 남기는 것",
+        "example": "한 시간 동안 회의했지만 담당자와 마감일이 정해지지 않은 팀",
     },
     {
         "id": "online-review-trust",
@@ -52,6 +55,7 @@ TOPICS = [
         "subject": "Korean consumer reviewing online shopping ratings on a laptop, realistic documentary style",
         "problem": "별점만 보고 구매하면 광고성 리뷰와 반복 패턴을 놓칠 수 있음",
         "solution": "구체적인 사용 후기, 반복 표현, 낮은 별점의 이유를 함께 보는 것",
+        "example": "별점만 보고 샀다가 실제 사용 후기가 부족하다는 것을 뒤늦게 알게 된 소비자",
     },
     {
         "id": "sleep-quality",
@@ -62,6 +66,7 @@ TOPICS = [
         "subject": "Korean office worker waking up tired in the morning, realistic documentary style",
         "problem": "불규칙한 수면 시간, 늦은 화면 사용, 낮은 수면의 질",
         "solution": "일정한 기상 시간, 빛 노출 조절, 잠들기 전 루틴을 만드는 것",
+        "example": "잠은 오래 잤지만 아침마다 개운하지 않은 직장인",
     },
 ]
 
@@ -103,11 +108,12 @@ def generate_topic(history):
         "content": (
             "Create one fresh Korean YouTube longform explainer topic as strict JSON. "
             "Avoid every used topic. The tone should be informative, practical, and suitable for a Korean audience. "
-            "Fields required: id, topic, title, description, tags, subject, problem, solution. "
+            "Fields required: id, topic, title, description, tags, subject, problem, solution, example. "
             "description must include two short paragraphs and 5 Korean hashtags. "
             "tags must be a list of 5 to 7 Korean strings. "
             "subject must be an English visual prompt for realistic Korean documentary imagery. "
-            "problem and solution must be concise Korean phrases.\n\n"
+            "problem, solution, and example must be concise Korean phrases. "
+            "example must describe a concrete Korean real-life situation and must not include English.\n\n"
             f"Used topics:\n{json.dumps(used_topics, ensure_ascii=False)}"
         ),
     }
@@ -125,7 +131,7 @@ def generate_topic(history):
     )
     raw = response.choices[0].message.content.strip()
     topic = json.loads(raw)
-    required = {"id", "topic", "title", "description", "tags", "subject", "problem", "solution"}
+    required = {"id", "topic", "title", "description", "tags", "subject", "problem", "solution", "example"}
     missing = sorted(required - set(topic))
     if missing:
         raise RuntimeError(f"Generated topic is missing fields: {missing}")
@@ -143,6 +149,7 @@ def pick_topic(history):
 
 
 def build_scenes(topic):
+    example = topic.get("example") or f"{topic['problem']} 때문에 같은 문제가 반복되는 상황"
     narrations = [
         f"{topic['title']}라는 질문은 많은 사람이 겪지만 쉽게 설명하지 못하는 문제입니다. 오늘은 이 문제를 결과가 아니라 구조로 나누어 보겠습니다.",
         f"겉으로 보이는 현상만 보면 원인을 놓치기 쉽습니다. 핵심은 {topic['problem']}이라는 구조를 보는 것입니다.",
@@ -155,7 +162,7 @@ def build_scenes(topic):
         "위험도를 보려면 자주 일어나는지와 한 번 일어났을 때 영향이 큰지를 함께 봐야 합니다.",
         f"해결의 순서는 단순합니다. 문제를 작게 나누고, 반복 원인을 찾고, 마지막으로 {topic['solution']}을 실행해야 합니다.",
         "좋은 방식은 말로 끝나지 않습니다. 진행 상황이 기록되고 결과가 비교되고 다음 행동이 정해져야 실제 변화가 생깁니다.",
-        f"예를 들어 {topic['subject']} 상황을 떠올려보세요. 보이는 문제와 실제 원인은 다를 수 있습니다.",
+        f"예를 들어 {example}을 떠올려보세요. 보이는 문제와 실제 원인은 다를 수 있습니다.",
         "실행은 혼자 끝나는 일이 아닙니다. 확인한 내용이 다음 행동으로 이어지고 그 행동이 다시 결과 확인으로 연결되어야 합니다.",
         "오늘 바로 할 일은 문제를 한 문장으로 적는 것입니다. 막연한 불편함을 구체적인 문장으로 바꾸면 해결 가능성이 올라갑니다.",
         "두 번째는 작은 실험입니다. 한 번에 모든 것을 바꾸려 하지 말고 가장 영향이 큰 행동 하나를 바꿔 결과를 확인해야 합니다.",
@@ -251,14 +258,75 @@ def draw_wrapped(draw, text, xy, fnt, max_width, fill, spacing=12):
         y += box[3] - box[1] + spacing
 
 
+def draw_badge(draw, text, xy, fill=(255, 205, 77, 255), text_fill=(8, 10, 14, 255)):
+    x, y = xy
+    draw.rounded_rectangle((x, y, x + 266, y + 62), radius=28, fill=fill)
+    draw.text((x + 30, y + 18), text, font=font(30), fill=text_fill)
+
+
+def draw_progress(draw, index, total, y=994, color=(255, 205, 77, 255)):
+    x1, x2 = 72, 1848
+    draw.line((x1, y, x2, y), fill=(255, 255, 255, 70), width=6)
+    draw.line((x1, y, x1 + int((x2 - x1) * ((index + 1) / total)), y), fill=color, width=8)
+
+
+def draw_scene_overlay(draw, scene, index, total):
+    badge_text = f"SCENE {index + 1:02}"
+    title = scene["title"]
+    caption = scene["caption"]
+    layout = index % 5
+
+    if layout == 0:
+        draw.rectangle((0, 0, 930, HEIGHT), fill=(5, 8, 14, 188))
+        draw_badge(draw, badge_text, (72, 70))
+        draw_wrapped(draw, title, (72, 210), font(70), 760, (255, 255, 255, 255), 16)
+        draw_wrapped(draw, caption, (72, 420), font(39), 760, (230, 236, 246, 255), 13)
+        draw_progress(draw, index, total)
+        return
+
+    if layout == 1:
+        draw.rectangle((0, 610, WIDTH, HEIGHT), fill=(5, 8, 14, 202))
+        draw_badge(draw, badge_text, (72, 560), fill=(104, 211, 145, 255))
+        draw_wrapped(draw, title, (72, 680), font(66), 1180, (255, 255, 255, 255), 14)
+        draw_wrapped(draw, caption, (72, 825), font(38), 1500, (235, 241, 245, 255), 12)
+        draw_progress(draw, index, total, y=1010, color=(104, 211, 145, 255))
+        return
+
+    if layout == 2:
+        draw.rectangle((990, 0, WIDTH, HEIGHT), fill=(5, 8, 14, 190))
+        draw_badge(draw, badge_text, (1088, 70), fill=(125, 211, 252, 255))
+        draw_wrapped(draw, title, (1088, 210), font(66), 700, (255, 255, 255, 255), 16)
+        draw_wrapped(draw, caption, (1088, 430), font(38), 700, (232, 240, 245, 255), 13)
+        draw_progress(draw, index, total, color=(125, 211, 252, 255))
+        return
+
+    if layout == 3:
+        draw.rectangle((0, 0, WIDTH, HEIGHT), fill=(4, 7, 12, 116))
+        draw.rounded_rectangle((260, 190, 1660, 760), radius=34, fill=(5, 8, 14, 184))
+        draw_badge(draw, badge_text, (827, 240), fill=(248, 113, 113, 255))
+        draw_wrapped(draw, title, (360, 350), font(72), 1200, (255, 255, 255, 255), 18)
+        draw_wrapped(draw, caption, (360, 560), font(38), 1200, (238, 242, 247, 255), 12)
+        draw_progress(draw, index, total, color=(248, 113, 113, 255))
+        return
+
+    draw.rectangle((0, 0, WIDTH, 330), fill=(5, 8, 14, 205))
+    draw.rectangle((0, 850, WIDTH, HEIGHT), fill=(5, 8, 14, 176))
+    draw_badge(draw, badge_text, (72, 58), fill=(250, 204, 21, 255))
+    draw_wrapped(draw, title, (380, 62), font(62), 1320, (255, 255, 255, 255), 14)
+    draw_wrapped(draw, caption, (72, 888), font(40), 1500, (239, 244, 248, 255), 12)
+    draw_progress(draw, index, total, y=1020, color=(250, 204, 21, 255))
+
+
 def render_scene_image(scene, index, total, raw_dir, frame_dir):
     raw = raw_dir / f"scene-{index + 1:02}-{scene['provider']}.png"
     frame = frame_dir / f"scene-{index + 1:02}.jpg"
     prompt = (
         "Realistic cinematic Korean YouTube documentary still, no text, no logos, no watermark, 16:9. "
-        "Leave clean darker space on the left for title overlay. "
+        "Leave clean negative space for editorial title overlays. "
         f"{scene['visual']} Narration context: {scene['narration']}"
     )
+    if raw.exists() and raw.stat().st_size == 0:
+        raw.unlink()
     if not raw.exists():
         if scene["provider"] == "openai":
             generate_openai(prompt, raw)
@@ -267,18 +335,42 @@ def render_scene_image(scene, index, total, raw_dir, frame_dir):
     img = fit_background(raw).convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    draw.rectangle((0, 0, 930, HEIGHT), fill=(5, 8, 14, 188))
-    draw.rounded_rectangle((72, 70, 338, 132), radius=28, fill=(255, 205, 77, 255))
-    draw.text((102, 88), f"SCENE {index + 1:02}", font=font(30), fill=(8, 10, 14, 255))
-    draw_wrapped(draw, scene["title"], (72, 210), font(70), 760, (255, 255, 255, 255), 16)
-    draw_wrapped(draw, scene["caption"], (72, 420), font(39), 760, (230, 236, 246, 255), 13)
-    draw.line((72, 994, 1848, 994), fill=(255, 255, 255, 70), width=6)
-    draw.line((72, 994, 72 + int(1776 * ((index + 1) / total)), 994), fill=(255, 205, 77, 255), width=8)
+    draw_scene_overlay(draw, scene, index, total)
     Image.alpha_composite(img, overlay).convert("RGB").save(frame, quality=94)
     return frame
 
 
-def elevenlabs_tts(text, path):
+def render_scene_images(scenes, raw_dir, frame_dir):
+    total = len(scenes)
+    workers = SCENE_IMAGE_MAX_WORKERS
+    if workers > 1:
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(render_scene_image, scene, idx, total, raw_dir, frame_dir): idx
+                    for idx, scene in enumerate(scenes)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    future.result()
+                    print(f"Scene {idx + 1:02} image complete")
+            return
+        except Exception as exc:
+            print(f"Parallel scene image generation failed; retrying serially: {exc}")
+
+    for idx, scene in enumerate(scenes):
+        render_scene_image(scene, idx, total, raw_dir, frame_dir)
+        print(f"Scene {idx + 1:02} image complete")
+
+
+def tts_voice_ids():
+    voice_ids = [os.environ["ELEVENLABS_VOICE_ID"]]
+    fallback = os.getenv("ELEVENLABS_FALLBACK_VOICE_IDS", "")
+    voice_ids.extend(x.strip() for x in fallback.split(",") if x.strip())
+    return list(dict.fromkeys(voice_ids))
+
+
+def elevenlabs_tts_with_voice(text, path, voice_id):
     payload = json.dumps({
         "text": text,
         "model_id": os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
@@ -291,13 +383,41 @@ def elevenlabs_tts(text, path):
         },
     }).encode("utf-8")
     req = request.Request(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{os.environ['ELEVENLABS_VOICE_ID']}",
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
         data=payload,
         headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"], "Content-Type": "application/json"},
         method="POST",
     )
     with request.urlopen(req, timeout=180) as response:
         path.write_bytes(response.read())
+
+
+def macos_say_tts(text, path):
+    if not shutil.which("say"):
+        raise RuntimeError("macOS say command is not available")
+    aiff = path.with_suffix(".aiff")
+    subprocess.run(["say", "-o", str(aiff), text], check=True)
+    subprocess.run(["ffmpeg", "-y", "-i", str(aiff), "-codec:a", "libmp3lame", "-b:a", "128k", str(path)], check=True)
+    aiff.unlink(missing_ok=True)
+
+
+def synthesize_tts(text, path):
+    errors = []
+    for voice_id in tts_voice_ids():
+        try:
+            elevenlabs_tts_with_voice(text, path, voice_id)
+            print(f"TTS complete with ElevenLabs voice: {voice_id}")
+            return
+        except Exception as exc:
+            errors.append(f"{voice_id}: {exc}")
+            print(f"ElevenLabs TTS failed for voice {voice_id}: {exc}")
+    try:
+        macos_say_tts(text, path)
+        print("TTS complete with macOS say fallback")
+        return
+    except Exception as exc:
+        errors.append(f"macOS say: {exc}")
+    raise RuntimeError("All TTS providers failed: " + " | ".join(errors))
 
 
 def duration(path):
@@ -327,24 +447,13 @@ def render_video(topic, scenes):
     narration_text = "\n\n".join(scene["narration"] for scene in scenes)
     raw_audio = OUT / "narration.mp3"
     wav_audio = OUT / "narration.wav"
-    elevenlabs_tts(narration_text, raw_audio)
+    synthesize_tts(narration_text, raw_audio)
     subprocess.run(["ffmpeg", "-y", "-i", str(raw_audio), "-ar", "48000", "-ac", "2", str(wav_audio)], check=True)
     total = duration(wav_audio)
     weights = [len(scene["narration"]) for scene in scenes]
     scene_durations = [total * weight / sum(weights) for weight in weights]
 
-    with ThreadPoolExecutor(max_workers=SCENE_IMAGE_MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(render_scene_image, scene, idx, len(scenes), raw_dir, frame_dir): idx
-            for idx, scene in enumerate(scenes)
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                future.result()
-                print(f"Scene {idx + 1:02} image complete")
-            except Exception as exc:
-                raise RuntimeError(f"Scene {idx + 1:02} image failed: {exc}") from exc
+    render_scene_images(scenes, raw_dir, frame_dir)
 
     concat = OUT / "concat.txt"
     lines = []
