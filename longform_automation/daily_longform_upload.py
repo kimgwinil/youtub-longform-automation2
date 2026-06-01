@@ -191,40 +191,100 @@ def pick_topic(history):
     return generate_topic(history)
 
 
-def build_scenes(topic):
+def generate_narrations(topic):
+    from google import genai
+
+    client = genai.Client(
+        api_key=os.environ.get("GEMINI_API_KEY") or os.environ["GOOGLE_API_KEY"]
+    )
+    prompt = (
+        "한국어 유튜브 롱폼 영상의 17개 장면 나레이션을 작성하세요.\n\n"
+        f"주제: {topic['title']}\n"
+        f"핵심 문제: {topic['problem']}\n"
+        f"해결 방향: {topic['solution']}\n"
+        f"예시 상황: {topic.get('example', '')}\n\n"
+        "규칙:\n"
+        "- 도입 방식, 문장 구조, 표현을 주제에 맞게 완전히 새롭게 작성할 것\n"
+        "- '구조로 나눠보겠습니다', '첫 번째 원인은', '마지막 점검은 세 가지입니다' 같은\n"
+        "  고정 표현을 절대 사용하지 말 것 — 매 영상이 같은 패턴처럼 들리면 안 됩니다\n"
+        "- 각 나레이션은 2~3문장, 자연스럽고 생동감 있는 한국어로 작성\n"
+        "- 장면 제목도 주제에 어울리게 구체적으로 작성\n\n"
+        "아래 JSON 배열 형식으로만 응답 (마크다운 코드블록 금지):\n"
+        '[{"title": "한국어 장면 제목", "title_en": "English scene title", '
+        '"narration": "나레이션 전문"}, ...]\n\n'
+        "17개 장면 역할 (순서 고정, 제목은 자유롭게):\n"
+        "1.도입 2.표면적 문제 3.진짜 원인 4.원인1 5.원인2 6.원인3 "
+        "7.사람들이 놓치는 것 8.상황이 악화되는 순간 9.위험 판단 기준 10.해결 순서 "
+        "11.효과적인 방식의 공통점 12.실제 사례 13.실행의 연결고리 "
+        "14.지금 당장 할 일 15.작은 실험 제안 16.최종 점검 17.결론"
+    )
+    response = client.models.generate_content(
+        model=os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash"),
+        contents=prompt,
+    )
+    raw = response.text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    data = json.loads(raw)
+    if len(data) != 17:
+        raise RuntimeError(f"Expected 17 scenes from Gemini, got {len(data)}")
+    return data
+
+
+def _build_scenes_fallback(topic):
     example = topic.get("example") or f"{topic['problem']} 때문에 같은 문제가 반복되는 상황"
     narrations = [
-        f"{topic['title']}라는 질문은 많은 사람이 겪지만 쉽게 설명하지 못하는 문제입니다. 오늘은 이 문제를 결과가 아니라 구조로 나누어 보겠습니다.",
-        f"겉으로 보이는 현상만 보면 원인을 놓치기 쉽습니다. 핵심은 {topic['problem']}이라는 구조를 보는 것입니다.",
-        "한 번의 우연보다 중요한 것은 반복되는 패턴입니다. 같은 문제가 반복된다면 개인의 의지보다 방식과 환경을 먼저 봐야 합니다.",
-        "첫 번째 원인은 기준이 흐린 상태입니다. 무엇을 확인해야 하는지 분명하지 않으면 사람은 익숙한 방식대로 움직입니다.",
-        "두 번째 원인은 피드백이 늦다는 점입니다. 잘못된 결과를 바로 확인하지 못하면 같은 행동을 계속 반복하게 됩니다.",
-        "세 번째 원인은 기록이 부족하다는 점입니다. 무엇을 했고 무엇이 달라졌는지 남기지 않으면 개선은 감각에만 의존합니다.",
-        "사람들이 자주 놓치는 지점은 작은 차이입니다. 작은 생략과 미루기가 쌓이면 나중에는 큰 차이를 만듭니다.",
-        "상황이 커지는 순간은 문제를 알고도 넘길 때입니다. 지금은 괜찮겠지라고 생각하는 순간 해결 신호가 뒤로 밀립니다.",
-        "위험도를 보려면 자주 일어나는지와 한 번 일어났을 때 영향이 큰지를 함께 봐야 합니다.",
-        f"해결의 순서는 단순합니다. 문제를 작게 나누고, 반복 원인을 찾고, 마지막으로 {topic['solution']}을 실행해야 합니다.",
-        "좋은 방식은 말로 끝나지 않습니다. 진행 상황이 기록되고 결과가 비교되고 다음 행동이 정해져야 실제 변화가 생깁니다.",
-        f"예를 들어 {example}을 떠올려보세요. 보이는 문제와 실제 원인은 다를 수 있습니다.",
-        "실행은 혼자 끝나는 일이 아닙니다. 확인한 내용이 다음 행동으로 이어지고 그 행동이 다시 결과 확인으로 연결되어야 합니다.",
-        "오늘 바로 할 일은 문제를 한 문장으로 적는 것입니다. 막연한 불편함을 구체적인 문장으로 바꾸면 해결 가능성이 올라갑니다.",
-        "두 번째는 작은 실험입니다. 한 번에 모든 것을 바꾸려 하지 말고 가장 영향이 큰 행동 하나를 바꿔 결과를 확인해야 합니다.",
-        "마지막 점검은 세 가지입니다. 원인이 구체적인가, 행동이 작게 정해졌는가, 결과를 다시 확인할 시간이 있는가입니다.",
-        f"결론은 분명합니다. {topic['solution']}이 쌓일 때 문제는 막연한 불안이 아니라 관리 가능한 과제가 됩니다.",
+        f"{topic['title']}에 대해 많은 사람이 궁금해하지만 제대로 설명된 적이 없습니다. 오늘은 이 문제의 핵심을 짚어보겠습니다.",
+        f"눈에 보이는 현상에만 집중하면 {topic['problem']}이라는 진짜 문제를 놓치게 됩니다.",
+        "반복되는 패턴에는 반드시 이유가 있습니다. 의지의 문제가 아니라 구조의 문제일 가능성이 높습니다.",
+        "첫 번째로 살펴볼 것은 판단 기준이 불분명한 상황입니다. 기준이 없으면 사람은 습관대로 움직이게 됩니다.",
+        "두 번째는 피드백 속도의 문제입니다. 결과를 늦게 확인할수록 같은 실수를 반복할 확률이 높아집니다.",
+        "세 번째는 기록의 부재입니다. 기록하지 않으면 무엇이 달라졌는지 알 수 없고, 개선도 어렵습니다.",
+        "작은 것을 무시하는 습관이 쌓이면 나중에 큰 문제로 돌아옵니다. 이 지점을 많은 사람이 그냥 지나칩니다.",
+        "문제를 인식하고도 미루는 순간 상황은 더 복잡해집니다. 타이밍이 중요한 이유가 여기 있습니다.",
+        "얼마나 자주 발생하는지와 한 번 발생했을 때 영향이 얼마나 큰지, 두 가지를 함께 봐야 합니다.",
+        f"{topic['solution']}이 핵심입니다. 문제를 잘게 나누고, 원인을 확인하고, 작은 것부터 실행하세요.",
+        "실제로 효과가 있는 방식에는 공통점이 있습니다. 기록되고, 비교되고, 다음 행동으로 이어지는 것입니다.",
+        f"{example}처럼 보이는 것과 실제 원인은 다를 수 있습니다. 현상이 아닌 원인을 보세요.",
+        "실행은 한 번으로 끝나지 않습니다. 확인이 행동으로, 행동이 다시 확인으로 이어져야 합니다.",
+        "지금 당장 할 수 있는 한 가지는 문제를 구체적인 문장으로 써보는 것입니다.",
+        "전부 바꾸려 하지 말고 영향이 가장 큰 행동 하나만 골라서 바꿔보세요.",
+        "세 가지만 확인하세요. 원인이 구체적인가, 행동이 작은가, 결과를 확인할 시간이 있는가.",
+        f"{topic['solution']}을 꾸준히 실천할 때 문제는 두려움이 아닌 관리 가능한 과제가 됩니다.",
     ]
     scenes = []
     for index, narration in enumerate(narrations):
-        title = LAYOUT_TITLES[index]
-        title_en = LAYOUT_TITLES_EN[index]
         scenes.append({
-            "title": title,
-            "title_en": title_en,
+            "title": LAYOUT_TITLES[index],
+            "title_en": LAYOUT_TITLES_EN[index],
             "caption": narration.split(".")[0].strip() + ".",
             "narration": narration,
-            "visual": f"{topic['subject']}. Scene focus: {title_en}. No text, no logos, no watermark.",
+            "visual": f"{topic['subject']}. Scene focus: {LAYOUT_TITLES_EN[index]}. No text, no logos, no watermark.",
             "provider": "openai" if index % 2 == 0 else "gemini",
         })
     return scenes
+
+
+def build_scenes(topic):
+    try:
+        data = generate_narrations(topic)
+        scenes = []
+        for index, item in enumerate(data):
+            title = item["title"]
+            title_en = item.get("title_en") or LAYOUT_TITLES_EN[index]
+            narration = item["narration"]
+            scenes.append({
+                "title": title,
+                "title_en": title_en,
+                "caption": narration.split(".")[0].strip() + ".",
+                "narration": narration,
+                "visual": f"{topic['subject']}. Scene focus: {title_en}. No text, no logos, no watermark.",
+                "provider": "openai" if index % 2 == 0 else "gemini",
+            })
+        return scenes
+    except Exception as exc:
+        print(f"AI narration generation failed; using fallback template: {exc}")
+        return _build_scenes_fallback(topic)
 
 
 def font(size):
