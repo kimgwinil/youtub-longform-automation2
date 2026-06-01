@@ -424,7 +424,7 @@ def draw_scene_overlay(draw, scene, index, total):
         draw_badge(draw, badge_text, (badge_x, 552), fill=(104, 211, 145, 255))
         title_bottom = draw_wrapped(draw, title, (80, 648), font(58), 1760, WHITE, 12)
         if caption and title_bottom + 16 < HEIGHT - 50:
-            draw_wrapped(draw, caption, (80, title_bottom + 16), font(34), CAPTION_COLOR, 11)
+            draw_wrapped(draw, caption, (80, title_bottom + 16), font(34), 1760, CAPTION_COLOR, 11)
         draw_progress(draw, index, total, y=1046, color=(104, 211, 145, 255))
         return
 
@@ -434,7 +434,7 @@ def draw_scene_overlay(draw, scene, index, total):
         draw_badge(draw, badge_text, (1060, 72), fill=(125, 211, 252, 255))
         title_bottom = draw_wrapped(draw, title, (1060, 158), font(60), 790, WHITE, 14)
         if caption:
-            draw_wrapped(draw, caption, (1060, title_bottom + 22), font(34), CAPTION_COLOR, 12)
+            draw_wrapped(draw, caption, (1060, title_bottom + 22), font(34), 790, CAPTION_COLOR, 12)
         draw_progress(draw, index, total, color=(125, 211, 252, 255))
         return
 
@@ -447,7 +447,7 @@ def draw_scene_overlay(draw, scene, index, total):
         draw_badge(draw, badge_text, (badge_x, 192), fill=(248, 113, 113, 255))
         title_bottom = draw_wrapped(draw, title, (280, 282), font(66), 1360, WHITE, 16)
         if caption and title_bottom + 20 < 830:
-            draw_wrapped(draw, caption, (280, title_bottom + 20), font(35), CAPTION_COLOR, 12)
+            draw_wrapped(draw, caption, (280, title_bottom + 20), font(35), 1360, CAPTION_COLOR, 12)
         draw_progress(draw, index, total, color=(248, 113, 113, 255))
         return
 
@@ -459,7 +459,7 @@ def draw_scene_overlay(draw, scene, index, total):
     draw_badge(draw, badge_text, (badge_x, 44), fill=(250, 204, 21, 255))
     draw_wrapped(draw, title, (80, 125), font(58), 1760, WHITE, 12)
     if caption:
-        draw_wrapped(draw, caption, (80, 858), font(37), CAPTION_COLOR, 12)
+        draw_wrapped(draw, caption, (80, 858), font(37), 1760, CAPTION_COLOR, 12)
     draw_progress(draw, index, total, y=1044, color=(250, 204, 21, 255))
 
 
