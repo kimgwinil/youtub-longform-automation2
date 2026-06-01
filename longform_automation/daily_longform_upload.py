@@ -191,6 +191,15 @@ def pick_topic(history):
     return generate_topic(history)
 
 
+def _first_sentence(text):
+    """Return first sentence, correctly handling ., ?, ! endings."""
+    import re
+    m = re.search(r'[.?!]', text)
+    if not m:
+        return text.strip()
+    return text[:m.end()].strip()
+
+
 def generate_narrations(topic):
     from google import genai
 
@@ -205,14 +214,17 @@ def generate_narrations(topic):
         f"예시 상황: {topic.get('example', '')}\n\n"
         "규칙:\n"
         "- 도입 방식, 문장 구조, 표현을 주제에 맞게 완전히 새롭게 작성할 것\n"
-        "- '구조로 나눠보겠습니다', '첫 번째 원인은', '마지막 점검은 세 가지입니다' 같은\n"
-        "  고정 표현을 절대 사용하지 말 것 — 매 영상이 같은 패턴처럼 들리면 안 됩니다\n"
-        "- 각 나레이션은 2~3문장, 자연스럽고 생동감 있는 한국어로 작성\n"
-        "- 장면 제목도 주제에 어울리게 구체적으로 작성\n\n"
+        "- 고정 반복 표현 절대 금지 — 매 영상이 같은 패턴처럼 들리면 안 됩니다\n"
+        "- 각 나레이션은 2~3문장, 자연스럽고 생동감 있는 한국어로 작성\n\n"
+        "title 필드 규칙 (매우 중요):\n"
+        "- 반드시 2~4단어의 짧은 키워드형 제목만 허용\n"
+        "- 문장, 질문, 긴 설명 절대 금지\n"
+        "- 올바른 예: '디지털 피로', '수면 방해', '해결 순서', '오늘의 실천'\n"
+        "- 잘못된 예: '혹시 당신도 디지털 좀비인가요?', '휴식이 없는 휴식'\n\n"
         "아래 JSON 배열 형식으로만 응답 (마크다운 코드블록 금지):\n"
-        '[{"title": "한국어 장면 제목", "title_en": "English scene title", '
+        '[{"title": "짧은 키워드 제목", "title_en": "Short keyword title", '
         '"narration": "나레이션 전문"}, ...]\n\n'
-        "17개 장면 역할 (순서 고정, 제목은 자유롭게):\n"
+        "17개 장면 역할 (순서 고정):\n"
         "1.도입 2.표면적 문제 3.진짜 원인 4.원인1 5.원인2 6.원인3 "
         "7.사람들이 놓치는 것 8.상황이 악화되는 순간 9.위험 판단 기준 10.해결 순서 "
         "11.효과적인 방식의 공통점 12.실제 사례 13.실행의 연결고리 "
@@ -257,7 +269,7 @@ def _build_scenes_fallback(topic):
         scenes.append({
             "title": LAYOUT_TITLES[index],
             "title_en": LAYOUT_TITLES_EN[index],
-            "caption": narration.split(".")[0].strip() + ".",
+            "caption": _first_sentence(narration),
             "narration": narration,
             "visual": f"{topic['subject']}. Scene focus: {LAYOUT_TITLES_EN[index]}. No text, no logos, no watermark.",
             "provider": "openai" if index % 2 == 0 else "gemini",
@@ -276,7 +288,7 @@ def build_scenes(topic):
             scenes.append({
                 "title": title,
                 "title_en": title_en,
-                "caption": narration.split(".")[0].strip() + ".",
+                "caption": _first_sentence(narration),
                 "narration": narration,
                 "visual": f"{topic['subject']}. Scene focus: {title_en}. No text, no logos, no watermark.",
                 "provider": "openai" if index % 2 == 0 else "gemini",
