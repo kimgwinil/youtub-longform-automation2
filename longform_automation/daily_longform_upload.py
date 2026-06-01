@@ -402,13 +402,18 @@ def draw_scene_overlay(draw, scene, index, total):
     title = _safe_text(scene, "title")
     caption = _safe_text(scene, "caption")
     WHITE = (255, 255, 255, 255)
-    CAPTION_COLOR = (220, 230, 245, 255)
+    CAPTION_COLOR = (210, 225, 245, 255)
+    BG = (5, 8, 14)          # panel base colour
+    SOLID = (*BG, 248)        # near-solid: completely hides background text
+    SEMI  = (*BG, 160)        # semi-transparent: used only as a soft vignette
     BADGE_W = 266
     layout = index % 5
 
     if layout == 0:
-        # Left vertical panel
-        draw.rectangle((0, 0, 900, HEIGHT), fill=(5, 8, 14, 200))
+        # Left vertical panel — solid to block background text
+        draw.rectangle((0, 0, 900, HEIGHT), fill=SOLID)
+        # Soft right-edge gradient via a second narrow semi-transparent strip
+        draw.rectangle((860, 0, 960, HEIGHT), fill=(*BG, 80))
         draw_badge(draw, badge_text, (72, 72))
         title_bottom = draw_wrapped(draw, title, (72, 158), font(64), 740, WHITE, 14)
         if caption:
@@ -417,20 +422,22 @@ def draw_scene_overlay(draw, scene, index, total):
         return
 
     if layout == 1:
-        # Bottom horizontal panel
-        draw.rectangle((0, 600, WIDTH, HEIGHT), fill=(5, 8, 14, 210))
-        # SCENE badge centered above the panel top edge
+        # Bottom panel — solid
+        draw.rectangle((0, 580, WIDTH, HEIGHT), fill=SOLID)
+        # Soft top-edge fade
+        draw.rectangle((0, 540, WIDTH, 582), fill=(*BG, 100))
         badge_x = (WIDTH - BADGE_W) // 2
-        draw_badge(draw, badge_text, (badge_x, 552), fill=(104, 211, 145, 255))
-        title_bottom = draw_wrapped(draw, title, (80, 648), font(58), 1760, WHITE, 12)
-        if caption and title_bottom + 16 < HEIGHT - 50:
-            draw_wrapped(draw, caption, (80, title_bottom + 16), font(34), 1760, CAPTION_COLOR, 11)
+        draw_badge(draw, badge_text, (badge_x, 530), fill=(104, 211, 145, 255))
+        title_bottom = draw_wrapped(draw, title, (80, 628), font(56), 1760, WHITE, 12)
+        if caption and title_bottom + 14 < HEIGHT - 48:
+            draw_wrapped(draw, caption, (80, title_bottom + 14), font(33), 1760, CAPTION_COLOR, 11)
         draw_progress(draw, index, total, y=1046, color=(104, 211, 145, 255))
         return
 
     if layout == 2:
-        # Right vertical panel
-        draw.rectangle((1020, 0, WIDTH, HEIGHT), fill=(5, 8, 14, 200))
+        # Right vertical panel — solid
+        draw.rectangle((1020, 0, WIDTH, HEIGHT), fill=SOLID)
+        draw.rectangle((960, 0, 1022, HEIGHT), fill=(*BG, 80))
         draw_badge(draw, badge_text, (1060, 72), fill=(125, 211, 252, 255))
         title_bottom = draw_wrapped(draw, title, (1060, 158), font(60), 790, WHITE, 14)
         if caption:
@@ -439,27 +446,27 @@ def draw_scene_overlay(draw, scene, index, total):
         return
 
     if layout == 3:
-        # Center card
-        draw.rectangle((0, 0, WIDTH, HEIGHT), fill=(4, 7, 12, 120))
-        draw.rounded_rectangle((200, 140, 1720, 840), radius=34, fill=(5, 8, 14, 200))
-        # SCENE badge centered inside card at top
+        # Full-screen semi-dark vignette + solid center card
+        draw.rectangle((0, 0, WIDTH, HEIGHT), fill=(*BG, 170))
+        draw.rounded_rectangle((200, 130, 1720, 850), radius=36, fill=SOLID)
         badge_x = (WIDTH - BADGE_W) // 2
-        draw_badge(draw, badge_text, (badge_x, 192), fill=(248, 113, 113, 255))
-        title_bottom = draw_wrapped(draw, title, (280, 282), font(66), 1360, WHITE, 16)
-        if caption and title_bottom + 20 < 830:
+        draw_badge(draw, badge_text, (badge_x, 180), fill=(248, 113, 113, 255))
+        title_bottom = draw_wrapped(draw, title, (280, 270), font(66), 1360, WHITE, 16)
+        if caption and title_bottom + 20 < 840:
             draw_wrapped(draw, caption, (280, title_bottom + 20), font(35), 1360, CAPTION_COLOR, 12)
         draw_progress(draw, index, total, color=(248, 113, 113, 255))
         return
 
-    # Layout 4 — Top + Bottom bands
-    draw.rectangle((0, 0, WIDTH, 300), fill=(5, 8, 14, 215))
-    draw.rectangle((0, 830, WIDTH, HEIGHT), fill=(5, 8, 14, 200))
-    # SCENE badge centered in top band
+    # Layout 4 — Top + Bottom solid bands
+    draw.rectangle((0, 0, WIDTH, 290), fill=SOLID)
+    draw.rectangle((0, 270, WIDTH, 320), fill=(*BG, 80))   # soft bottom fade of top band
+    draw.rectangle((0, 810, WIDTH, 840), fill=(*BG, 80))   # soft top fade of bottom band
+    draw.rectangle((0, 838, WIDTH, HEIGHT), fill=SOLID)
     badge_x = (WIDTH - BADGE_W) // 2
-    draw_badge(draw, badge_text, (badge_x, 44), fill=(250, 204, 21, 255))
-    draw_wrapped(draw, title, (80, 125), font(58), 1760, WHITE, 12)
+    draw_badge(draw, badge_text, (badge_x, 38), fill=(250, 204, 21, 255))
+    draw_wrapped(draw, title, (80, 120), font(58), 1760, WHITE, 12)
     if caption:
-        draw_wrapped(draw, caption, (80, 858), font(37), 1760, CAPTION_COLOR, 12)
+        draw_wrapped(draw, caption, (80, 862), font(37), 1760, CAPTION_COLOR, 12)
     draw_progress(draw, index, total, y=1044, color=(250, 204, 21, 255))
 
 
