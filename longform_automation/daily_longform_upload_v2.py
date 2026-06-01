@@ -5,6 +5,7 @@ import daily_longform_upload as base
 
 
 _generate_gemini = base.generate_gemini
+_generate_openai = base.generate_openai
 
 _TOPIC_PROMPT_USER = (
     "Create one fresh Korean YouTube longform explainer topic as strict JSON. "
@@ -26,7 +27,15 @@ def generate_gemini_with_fallback(prompt, path):
             raise RuntimeError("Gemini returned an empty image")
     except Exception as exc:
         print(f"Gemini image generation failed; falling back to OpenAI: {exc}")
-        base.generate_openai(prompt, path)
+        _generate_openai(prompt, path)
+
+
+def generate_openai_with_fallback(prompt, path):
+    try:
+        _generate_openai(prompt, path)
+    except Exception as exc:
+        print(f"OpenAI image generation failed; falling back to Gemini: {exc}")
+        _generate_gemini(prompt, path)
 
 
 def _parse_and_validate_topic(raw, used_topics):
@@ -102,6 +111,7 @@ def pick_topic(history):
 
 base.pick_topic = pick_topic
 base.generate_gemini = generate_gemini_with_fallback
+base.generate_openai = generate_openai_with_fallback
 
 
 if __name__ == "__main__":
