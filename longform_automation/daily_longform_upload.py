@@ -1,5 +1,7 @@
 import base64
+import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -8,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from urllib import request
+from urllib import error, request
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -21,9 +23,21 @@ ROOT = Path.cwd()
 HISTORY = Path(__file__).with_name("topic-history.json")
 OUT = ROOT / "output" / datetime.now().strftime("%Y%m%d")
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
-SCENE_IMAGE_MAX_WORKERS = max(1, min(6, int(os.getenv("SCENE_IMAGE_MAX_WORKERS", "4"))))
+SCENE_IMAGE_MAX_WORKERS = max(1, min(4, int(os.getenv("SCENE_IMAGE_MAX_WORKERS", "2"))))
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "gemini").lower()
 BGM_ENABLED = os.getenv("ENABLE_BGM", "false").lower() == "true"
 SLIDE_CAPTIONS_ENABLED = os.getenv("ENABLE_SLIDE_CAPTIONS", "false").lower() == "true"
+BURN_IN_SUBTITLES = os.getenv("BURN_IN_SUBTITLES", "true").lower() == "true"
+UPLOAD_YOUTUBE_CAPTIONS = os.getenv("UPLOAD_YOUTUBE_CAPTIONS", "false").lower() == "true"
+SLIDE_MOTION_ENABLED = os.getenv("ENABLE_SLIDE_MOTION", "false").lower() == "true"
+HEYGEN_BASE_URL = os.getenv("HEYGEN_BASE_URL", "https://api.heygen.com").rstrip("/")
+HEYGEN_ENABLED = os.getenv("HEYGEN_ENABLED", "false").lower() == "true"
+HEYGEN_SCENE_INDICES = os.getenv("HEYGEN_SCENE_INDICES", "1,17")
+HEYGEN_MIN_REPLACED_SCENES = int(os.getenv("HEYGEN_MIN_REPLACED_SCENES", "1"))
+HEYGEN_RESOLUTION = os.getenv("HEYGEN_RESOLUTION", "1080p")
+HEYGEN_ASPECT_RATIO = os.getenv("HEYGEN_ASPECT_RATIO", "16:9")
+HEYGEN_POLL_INTERVAL = int(os.getenv("HEYGEN_POLL_INTERVAL", "10"))
+HEYGEN_POLL_TIMEOUT = int(os.getenv("HEYGEN_POLL_TIMEOUT", "900"))
 
 TOPICS = [
     {
@@ -153,10 +167,13 @@ def generate_topic(history):
         "content": (
             "Create one fresh Korean YouTube longform explainer topic as strict JSON. "
             "Avoid every used topic. The tone should be informative, practical, and suitable for a Korean audience. "
+            "Choose a concrete everyday problem that can be shown visually in realistic slides. "
+            "Do not choose broad abstract topics, vague culture commentary, politics, disasters, celebrities, or medical diagnosis. "
+            "The topic must naturally support 17 different visual scenes with Korean people, places, objects, or actions. "
             "Fields required: id, topic, title, description, tags, subject, problem, solution, example. "
             "description must include two short paragraphs and 5 Korean hashtags. "
             "tags must be a list of 5 to 7 Korean strings. "
-            "subject must be an English visual prompt for realistic Korean documentary imagery. "
+            "subject must be an English visual prompt for realistic Korean documentary imagery, with a specific location and visible main subject. "
             "problem, solution, and example must be concise Korean phrases using standard Korean spelling. "
             "example must describe a concrete Korean real-life situation and must not include English. "
             "Do not use slang, intentionally misspelled Korean, or unclear abbreviations.\n\n"
@@ -195,12 +212,27 @@ def pick_topic(history):
 
 
 def _first_sentence(text):
-    """Return first sentence, correctly handling ., ?, ! endings."""
-    import re
-    m = re.search(r'[.?!]', text)
-    if not m:
+    """Return a subtitle-sized opening sentence without cutting short quoted questions."""
+    parts = re.findall(r".+?(?:[.?!。！？]+[\"'’”)]*|$)", text.strip())
+    if not parts:
         return text.strip()
-    return text[:m.end()].strip()
+    caption = ""
+    for part in parts:
+        caption = (caption + " " + part.strip()).strip()
+        if len(caption) >= 24:
+            break
+    if len(caption) > 72:
+        shortened = caption[:72].rsplit(" ", 1)[0].strip()
+        return shortened or caption[:72].strip()
+    return caption
+
+
+def scene_image_provider(index):
+    if IMAGE_PROVIDER in {"openai", "gemini"}:
+        return IMAGE_PROVIDER
+    if IMAGE_PROVIDER == "mixed":
+        return "openai" if index % 2 == 0 else "gemini"
+    return "gemini"
 
 
 def generate_narrations(topic):
@@ -219,6 +251,11 @@ def generate_narrations(topic):
         "- 도입 방식, 문장 구조, 표현을 주제에 맞게 완전히 새롭게 작성할 것\n"
         "- 고정 반복 표현 절대 금지 — 매 영상이 같은 패턴처럼 들리면 안 됩니다\n"
         "- 각 나레이션은 2~3문장, 자연스럽고 생동감 있는 한국어로 작성\n\n"
+        "장면 품질 규칙:\n"
+        "- 각 장면은 서로 다른 상황, 장소, 행동을 말해야 합니다\n"
+        "- 추상적인 말만 하지 말고, 화면에 보일 수 있는 사람·사물·행동을 포함하세요\n"
+        "- 같은 문장 시작이나 같은 결론을 반복하지 마세요\n"
+        "- 자막으로 쓸 첫 문장은 24자에서 48자 사이의 완결된 한국어 문장으로 시작하세요\n\n"
         "title 필드 규칙 (매우 중요):\n"
         "- 반드시 2~4단어의 짧은 키워드형 제목만 허용\n"
         "- 문장, 질문, 긴 설명 절대 금지\n"
@@ -267,15 +304,42 @@ def _build_scenes_fallback(topic):
         "세 가지만 확인하세요. 원인이 구체적인가, 행동이 작은가, 결과를 확인할 시간이 있는가.",
         f"{topic['solution']}을 꾸준히 실천할 때 문제는 두려움이 아닌 관리 가능한 과제가 됩니다.",
     ]
+    details = [
+        "실제 생활 장면을 기준으로 왜 이런 일이 반복되는지 차근차근 살펴보겠습니다.",
+        "겉으로는 작은 불편처럼 보이지만, 같은 상황이 반복되면 비용과 스트레스가 커집니다.",
+        "그래서 오늘은 감정적인 조언보다 실제로 확인할 수 있는 기준을 중심으로 설명하겠습니다.",
+        "이 장면에서는 무엇을 먼저 봐야 하는지, 어떤 신호를 놓치면 안 되는지 분명히 짚어보겠습니다.",
+        "비슷해 보이는 선택지도 기준이 다르면 전혀 다른 결과를 만들 수 있습니다.",
+        "생활 속에서 자주 마주치는 사례를 떠올리면 이 차이가 훨씬 쉽게 이해됩니다.",
+        "작은 요소 하나가 전체 흐름을 바꾸기 때문에, 사소해 보이는 부분도 따로 확인해야 합니다.",
+        "이때부터는 문제를 미루는 대신 기록하고 나누어 보는 접근이 필요합니다.",
+        "판단이 어려운 순간에는 빈도, 영향, 되돌릴 수 있는지를 함께 보면 됩니다.",
+        "순서를 정하면 복잡한 문제도 오늘 할 수 있는 행동으로 바뀝니다.",
+        "좋은 방식은 어렵기보다 반복 가능하고, 다음 행동이 분명하다는 특징이 있습니다.",
+        "현실 사례에서는 말로 아는 것과 실제로 적용하는 것 사이의 차이가 드러납니다.",
+        "한 번의 결심보다 매일 확인할 수 있는 작은 연결고리가 더 중요합니다.",
+        "처음부터 완벽하게 하려 하지 말고, 지금 보이는 한 가지부터 바꾸는 것이 좋습니다.",
+        "작은 실험은 부담을 줄이고, 결과를 확인하며 방식을 고칠 수 있게 합니다.",
+        "점검 기준을 미리 정해두면 시간이 지나도 같은 실수를 줄일 수 있습니다.",
+        "결국 핵심은 복잡한 문제를 생활 속에서 계속 실행 가능한 방식으로 바꾸는 것입니다.",
+    ]
+    narrations = [f"{narration} {details[index]}" for index, narration in enumerate(narrations)]
     scenes = []
     for index, narration in enumerate(narrations):
         scenes.append({
+            "topic_id": topic["id"],
             "title": LAYOUT_TITLES[index],
             "title_en": LAYOUT_TITLES_EN[index],
             "caption": _first_sentence(narration),
             "narration": narration,
-            "visual": f"{topic['subject']}. Scene focus: {LAYOUT_TITLES_EN[index]}. No text, no logos, no watermark.",
-            "provider": "openai" if index % 2 == 0 else "gemini",
+            "visual": (
+                f"{topic['subject']}. Scene focus: {LAYOUT_TITLES_EN[index]}. "
+                f"Represent this Korean narration literally and clearly: {narration} "
+                "Show a clear visual situation that matches this exact scene, with relevant people, objects, and actions fully visible. "
+                "Use a different composition from other scenes and keep the subject away from all edges. "
+                "No text, no logos, no watermark."
+            ),
+            "provider": scene_image_provider(index),
         })
     return scenes
 
@@ -289,12 +353,19 @@ def build_scenes(topic):
             title_en = item.get("title_en") or LAYOUT_TITLES_EN[index]
             narration = item["narration"]
             scenes.append({
+                "topic_id": topic["id"],
                 "title": title,
                 "title_en": title_en,
                 "caption": _first_sentence(narration),
                 "narration": narration,
-                "visual": f"{topic['subject']}. Scene focus: {title_en}. No text, no logos, no watermark.",
-                "provider": "openai" if index % 2 == 0 else "gemini",
+                "visual": (
+                    f"{topic['subject']}. Scene focus: {title_en}. "
+                    f"Represent this Korean narration literally and clearly: {narration} "
+                    "Show a clear visual situation that matches this exact scene, with relevant people, objects, and actions fully visible. "
+                    "Use a different composition from other scenes and keep the subject away from all edges. "
+                    "No text, no logos, no watermark."
+                ),
+                "provider": scene_image_provider(index),
             })
         return scenes
     except Exception as exc:
@@ -309,7 +380,7 @@ def font(size):
 
 
 def generate_openai(prompt, path):
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=float(os.getenv("OPENAI_IMAGE_TIMEOUT", "180")))
     result = client.images.generate(
         model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"),
         prompt=prompt,
@@ -366,6 +437,77 @@ def fit_cover(path):
         top = (img.height - new_h) // 2
         img = img.crop((0, top, img.width, top + new_h))
     return img.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+
+
+def resize_cover(img, size):
+    target_w, target_h = size
+    target = target_w / target_h
+    ratio = img.width / img.height
+    if ratio > target:
+        new_w = int(img.height * target)
+        left = (img.width - new_w) // 2
+        img = img.crop((left, 0, left + new_w, img.height))
+    else:
+        new_h = int(img.width / target)
+        top = (img.height - new_h) // 2
+        img = img.crop((0, top, img.width, top + new_h))
+    return img.resize(size, Image.Resampling.LANCZOS)
+
+
+def resize_contain(img, size):
+    target_w, target_h = size
+    scale = min(target_w / img.width, target_h / img.height)
+    new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def crop_dark_borders(img):
+    gray = img.convert("L")
+    mask = gray.point(lambda pixel: 255 if pixel > 18 else 0)
+    bbox = mask.getbbox()
+    if not bbox:
+        return img
+    left, top, right, bottom = bbox
+    crop_w, crop_h = right - left, bottom - top
+    has_border = left > 20 or top > 20 or right < img.width - 20 or bottom < img.height - 20
+    enough_content = crop_w >= img.width * 0.45 and crop_h >= img.height * 0.45
+    if not has_border or not enough_content:
+        return img
+    pad = 6
+    return img.crop((
+        max(0, left - pad),
+        max(0, top - pad),
+        min(img.width, right + pad),
+        min(img.height, bottom + pad),
+    ))
+
+
+def slide_visual_rect(layout):
+    if layout in {1, 4}:
+        return (220, 160, 1700, 805)
+    if layout == 2:
+        return (140, 150, 1550, 820)
+    if layout == 3:
+        return (310, 145, 1610, 805)
+    return (250, 150, 1780, 815)
+
+
+def compose_slide_background(path, layout):
+    src = crop_dark_borders(Image.open(path).convert("RGB"))
+    base = resize_cover(src, (WIDTH, HEIGHT)).filter(ImageFilter.GaussianBlur(radius=30))
+    base = Image.blend(base, Image.new("RGB", base.size, (5, 8, 14)), 0.35)
+
+    left, top, right, bottom = slide_visual_rect(layout)
+    visual_w, visual_h = right - left, bottom - top
+    visual_bg = resize_cover(src, (visual_w, visual_h)).filter(ImageFilter.GaussianBlur(radius=22))
+    visual_bg = Image.blend(visual_bg, Image.new("RGB", visual_bg.size, (5, 8, 14)), 0.15)
+    base.paste(visual_bg, (left, top))
+
+    contained = resize_contain(src, (visual_w, visual_h))
+    x = left + (visual_w - contained.width) // 2
+    y = top + (visual_h - contained.height) // 2
+    base.paste(contained, (x, y))
+    return base
 
 
 def fit_background(path):
@@ -437,6 +579,66 @@ def draw_progress(draw, index, total, y=994, color=(255, 205, 77, 255)):
     draw.line((x1, y, x1 + int((x2 - x1) * ((index + 1) / total)), y), fill=color, width=8)
 
 
+def draw_panel_texture(draw, rect, accent, align="left"):
+    left, top, right, bottom = rect
+    for offset in range(0, int(bottom - top), 82):
+        y = top + offset
+        draw.line((left + 38, y, right - 38, y), fill=(255, 255, 255, 18), width=1)
+    if align == "right":
+        draw.rectangle((right - 14, top, right, bottom), fill=accent)
+        for x in range(right - 120, right - 34, 28):
+            draw.line((x, bottom - 190, x + 82, bottom - 108), fill=(*accent[:3], 70), width=3)
+    else:
+        draw.rectangle((left, top, left + 14, bottom), fill=accent)
+        for x in range(left + 36, left + 122, 28):
+            draw.line((x, bottom - 190, x + 82, bottom - 108), fill=(*accent[:3], 70), width=3)
+
+
+def draw_scene_number(draw, index, xy, fill=(255, 255, 255, 32)):
+    draw.text(xy, f"{index + 1:02}", font=font(168), fill=fill)
+
+
+def draw_caption_box(draw, caption, xy, max_width, accent, align="left"):
+    x, y = xy
+    marker = (x, y + 8, x + 8, y + 102)
+    if align == "center":
+        marker = (x + max_width // 2 - 4, y - 18, x + max_width // 2 + 4, y + 2)
+    draw.rounded_rectangle(marker, radius=4, fill=accent)
+    return draw_wrapped(draw, caption, (x + (24 if align != "center" else 0), y), font(35), max_width - 30, (218, 231, 244, 255), 12, align=align)
+
+
+def draw_footer_meta(draw, index, total, y, accent):
+    label = f"{index + 1:02} / {total:02}"
+    draw.text((72, y - 42), label, font=font(28), fill=(230, 238, 248, 180))
+    draw_progress(draw, index, total, y=y, color=accent)
+
+
+def draw_burned_subtitle(draw, text):
+    if not text:
+        return
+    fnt = font(38)
+    max_width = 1460
+    lines = wrap_text(draw, text, fnt, max_width)
+    lines = lines[:2]
+    if not lines:
+        return
+    line_sizes = [text_size(draw, line, fnt) for line in lines]
+    text_h = sum(h for _, h in line_sizes) + max(0, len(lines) - 1) * 12
+    pad_x, pad_y = 34, 22
+    box_w = min(1620, max(w for w, _ in line_sizes) + pad_x * 2)
+    box_h = text_h + pad_y * 2
+    left = (WIDTH - box_w) // 2
+    top = 850
+    rect = (left, top, left + box_w, top + box_h)
+    draw.rounded_rectangle(rect, radius=18, fill=(0, 0, 0, 190))
+    y = top + pad_y
+    for line, (line_w, line_h) in zip(lines, line_sizes):
+        x = left + (box_w - line_w) / 2
+        draw.text((x + 2, y + 2), line, font=fnt, fill=(0, 0, 0, 170))
+        draw.text((x, y), line, font=fnt, fill=(255, 255, 255, 255))
+        y += line_h + 12
+
+
 def _safe_text(scene, key):
     """Return Korean text if CJK font is available, otherwise English fallback or empty string."""
     text = scene.get(key, "")
@@ -462,93 +664,69 @@ def should_show_caption(title, caption):
     return True
 
 
+def safe_asset_name(text):
+    text = str(text or "")
+    text = re.sub(r"[^0-9A-Za-z_-]+", "-", text or "").strip("-").lower()
+    return text or "topic"
+
+
+def prompt_cache_key(scene, prompt):
+    payload = "|".join(
+        str(part or "")
+        for part in [
+            scene.get("topic_id", ""),
+            scene.get("title_en", ""),
+            scene.get("visual", ""),
+            prompt,
+        ]
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
+
+
 def draw_scene_overlay(draw, scene, index, total):
     badge_text = f"SCENE {index + 1:02}"
     title = _safe_text(scene, "title")
-    caption = _safe_text(scene, "caption")
-    show_caption = SLIDE_CAPTIONS_ENABLED and should_show_caption(title, caption)
     WHITE = (255, 255, 255, 255)
-    CAPTION_COLOR = (210, 225, 245, 255)
     BG = (5, 8, 14)          # panel base colour
-    SOLID = (*BG, 248)        # near-solid: completely hides background text
-    SEMI  = (*BG, 160)        # semi-transparent: used only as a soft vignette
-    BADGE_W = 266
     layout = index % 5
+    accents = [
+        (255, 205, 77, 255),
+        (104, 211, 145, 255),
+        (125, 211, 252, 255),
+        (248, 113, 113, 255),
+        (250, 204, 21, 255),
+    ]
+    accent = accents[layout]
+    draw.rectangle((0, 0, WIDTH, HEIGHT), fill=(*BG, 92))
+    draw.rounded_rectangle((56, 42, 1864, 132), radius=18, fill=(*BG, 218))
+    draw.rectangle((56, 42, 1864, 50), fill=accent)
+    draw_badge(draw, badge_text, (86, 60), fill=accent)
+    draw_wrapped(draw, title, (390, 62), font(52), 1220, WHITE, 8)
+    draw.text((1718, 63), f"{index + 1:02}", font=font(48), fill=(230, 238, 248, 145))
 
-    if layout == 0:
-        # Left vertical panel — solid to block background text
-        draw.rectangle((0, 0, 900, HEIGHT), fill=SOLID)
-        # Soft right-edge gradient via a second narrow semi-transparent strip
-        draw.rectangle((860, 0, 960, HEIGHT), fill=(*BG, 80))
-        draw_badge(draw, badge_text, (72, 72))
-        title_bottom = draw_wrapped(draw, title, (72, 158), font(64), 740, WHITE, 14)
-        if show_caption:
-            draw_wrapped(draw, caption, (72, title_bottom + 22), font(36), 740, CAPTION_COLOR, 12)
-        draw_progress(draw, index, total)
-        return
-
-    if layout == 1:
-        # Bottom panel — solid
-        draw.rectangle((0, 580, WIDTH, HEIGHT), fill=SOLID)
-        # Soft top-edge fade
-        draw.rectangle((0, 540, WIDTH, 582), fill=(*BG, 100))
-        badge_x = (WIDTH - BADGE_W) // 2
-        draw_badge(draw, badge_text, (badge_x, 530), fill=(104, 211, 145, 255))
-        title_bottom = draw_wrapped(draw, title, (80, 628), font(56), 1760, WHITE, 12)
-        if show_caption and title_bottom + 14 < HEIGHT - 48:
-            draw_wrapped(draw, caption, (80, title_bottom + 14), font(33), 1760, CAPTION_COLOR, 11)
-        draw_progress(draw, index, total, y=1046, color=(104, 211, 145, 255))
-        return
-
-    if layout == 2:
-        # Right vertical panel — solid
-        draw.rectangle((1020, 0, WIDTH, HEIGHT), fill=SOLID)
-        draw.rectangle((960, 0, 1022, HEIGHT), fill=(*BG, 80))
-        draw_badge(draw, badge_text, (1060, 72), fill=(125, 211, 252, 255))
-        title_bottom = draw_wrapped(draw, title, (1060, 158), font(60), 790, WHITE, 14)
-        if show_caption:
-            draw_wrapped(draw, caption, (1060, title_bottom + 22), font(34), 790, CAPTION_COLOR, 12)
-        draw_progress(draw, index, total, color=(125, 211, 252, 255))
-        return
-
-    if layout == 3:
-        # Full-screen semi-dark vignette + solid center card
-        draw.rectangle((0, 0, WIDTH, HEIGHT), fill=(*BG, 170))
-        draw.rounded_rectangle((200, 130, 1720, 850), radius=36, fill=SOLID)
-        badge_x = (WIDTH - BADGE_W) // 2
-        draw_badge(draw, badge_text, (badge_x, 180), fill=(248, 113, 113, 255))
-        title_bottom = draw_wrapped(draw, title, (280, 270), font(66), 1360, WHITE, 16, align="center")
-        if show_caption and title_bottom + 20 < 840:
-            draw_wrapped(draw, caption, (280, title_bottom + 20), font(35), 1360, CAPTION_COLOR, 12, align="center")
-        draw_progress(draw, index, total, color=(248, 113, 113, 255))
-        return
-
-    # Layout 4 — Top + Bottom solid bands
-    draw.rectangle((0, 0, WIDTH, 290), fill=SOLID)
-    draw.rectangle((0, 270, WIDTH, 320), fill=(*BG, 80))   # soft bottom fade of top band
-    draw.rectangle((0, 810, WIDTH, 840), fill=(*BG, 80))   # soft top fade of bottom band
-    draw.rectangle((0, 838, WIDTH, HEIGHT), fill=SOLID)
-    badge_x = (WIDTH - BADGE_W) // 2
-    draw_badge(draw, badge_text, (badge_x, 38), fill=(250, 204, 21, 255))
-    draw_wrapped(draw, title, (80, 120), font(58), 1760, WHITE, 12)
-    if show_caption:
-        draw_wrapped(draw, caption, (80, 862), font(37), 1760, CAPTION_COLOR, 12)
-    draw_progress(draw, index, total, y=1044, color=(250, 204, 21, 255))
+    left, top, right, bottom = slide_visual_rect(layout)
+    draw.rounded_rectangle((left - 8, top - 8, right + 8, bottom + 8), radius=20, outline=(*accent[:3], 210), width=4)
+    draw_footer_meta(draw, index, total, 1038, accent)
 
 
 def render_scene_image(scene, index, total, raw_dir, frame_dir):
-    raw = raw_dir / f"scene-{index + 1:02}-{scene['provider']}.png"
     frame = frame_dir / f"scene-{index + 1:02}.jpg"
     prompt = (
         "Realistic cinematic Korean YouTube documentary still, 16:9. "
+        "Create one clear, topic-specific scene that directly matches the narration and slide title. "
+        "The main person, clothing, object, or situation must be fully visible within the frame with comfortable margins. "
+        "Use a balanced composition with meaningful details across the whole image; do not leave an empty half of the frame. "
+        "Avoid extreme close-ups, cropped heads, cropped hands, cropped objects, backs-only shots, or subjects pushed to the edge. "
         "STRICT RULE: absolutely zero text, zero letters, zero numbers, zero signs, zero labels, "
         "zero captions, zero subtitles, zero watermarks, zero logos anywhere in the image. "
         "Do not render any written language, Hangul, English letters, numbers, symbols, UI text, signs, labels, subtitles, logos, or watermark. "
         "Avoid books, papers, screens, posters, whiteboards, or signboards with visible writing. "
         "If text-like detail would be needed, replace it with clean abstract shapes, blank surfaces, or non-readable visual metaphors. "
-        "Leave generous clean negative space on left or bottom for editorial overlays. "
         f"{scene['visual']} Narration context: {scene['narration']}"
     )
+    topic_id = safe_asset_name(scene.get("topic_id", "topic"))
+    cache_key = prompt_cache_key(scene, prompt)
+    raw = raw_dir / f"{topic_id}-scene-{index + 1:02}-{scene['provider']}-{cache_key}.png"
     if raw.exists() and raw.stat().st_size == 0:
         raw.unlink()
     if not raw.exists():
@@ -556,10 +734,12 @@ def render_scene_image(scene, index, total, raw_dir, frame_dir):
             generate_openai(prompt, raw)
         else:
             generate_gemini(prompt, raw)
-    img = fit_background(raw).convert("RGBA")
+    img = compose_slide_background(raw, index % 5).convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     draw_scene_overlay(draw, scene, index, total)
+    if BURN_IN_SUBTITLES:
+        draw_burned_subtitle(draw, _safe_text(scene, "caption"))
     Image.alpha_composite(img, overlay).convert("RGB").save(frame, quality=94)
     return frame
 
@@ -711,12 +891,421 @@ def duration(path):
     return float(result.stdout.strip())
 
 
+def video_probe(path):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration,bit_rate",
+            "-show_entries",
+            "stream=codec_type,width,height,bit_rate",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def validate_video_quality(path, expected_duration=None, min_width=1280, min_height=720):
+    if not path.exists() or path.stat().st_size < 100_000:
+        raise RuntimeError(f"Video is missing or too small: {path}")
+    probe = video_probe(path)
+    streams = probe.get("streams", [])
+    video_streams = [s for s in streams if s.get("codec_type") == "video"]
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    if not video_streams:
+        raise RuntimeError("Video has no video stream")
+    if not audio_streams:
+        raise RuntimeError("Video has no audio stream")
+    width = int(video_streams[0].get("width") or 0)
+    height = int(video_streams[0].get("height") or 0)
+    if width < min_width or height < min_height:
+        raise RuntimeError(f"Video resolution is too low: {width}x{height}")
+    actual_duration = float(probe.get("format", {}).get("duration") or 0)
+    if actual_duration <= 0:
+        raise RuntimeError("Video duration is empty")
+    if expected_duration and not (expected_duration * 0.65 <= actual_duration <= expected_duration * 1.45):
+        raise RuntimeError(
+            f"Video duration mismatch: expected about {expected_duration:.1f}s, got {actual_duration:.1f}s"
+        )
+    return actual_duration
+
+
+def _find_key(data, key):
+    if isinstance(data, dict):
+        if key in data:
+            return data[key]
+        for value in data.values():
+            found = _find_key(value, key)
+            if found is not None:
+                return found
+    if isinstance(data, list):
+        for value in data:
+            found = _find_key(value, key)
+            if found is not None:
+                return found
+    return None
+
+
+def heygen_headers(content_type="application/json"):
+    api_key = os.getenv("HEYGEN_API_KEY")
+    if not api_key:
+        raise RuntimeError("HEYGEN_API_KEY is not set")
+    headers = {"x-api-key": api_key}
+    if content_type:
+        headers["Content-Type"] = content_type
+    return headers
+
+
+def heygen_json(method, path, payload=None, timeout=180):
+    body = None
+    headers = heygen_headers()
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+    req = request.Request(f"{HEYGEN_BASE_URL}{path}", data=body, headers=headers, method=method)
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HeyGen API failed with HTTP {exc.code}: {detail}") from exc
+
+
+def heygen_upload_asset(path):
+    boundary = f"----codex-heygen-{int(time.time() * 1000)}"
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    file_bytes = path.read_bytes()
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8"),
+            file_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    req = request.Request(
+        f"{HEYGEN_BASE_URL}/v3/assets",
+        data=body,
+        headers=heygen_headers(f"multipart/form-data; boundary={boundary}"),
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=300) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HeyGen asset upload failed with HTTP {exc.code}: {detail}") from exc
+    asset_id = _find_key(data, "asset_id") or _find_key(data, "id")
+    if not asset_id:
+        raise RuntimeError(f"HeyGen asset upload did not return an asset id: {data}")
+    return asset_id
+
+
+def heygen_poll_video(video_id):
+    deadline = time.time() + HEYGEN_POLL_TIMEOUT
+    while time.time() < deadline:
+        data = heygen_json("GET", f"/v3/videos/{video_id}", timeout=60)
+        status = _find_key(data, "status")
+        if status == "completed":
+            video_url = _find_key(data, "video_url") or _find_key(data, "url")
+            if not video_url:
+                raise RuntimeError(f"HeyGen completed without a video URL: {data}")
+            return video_url
+        if status == "failed":
+            message = _find_key(data, "failure_message") or _find_key(data, "message") or data
+            raise RuntimeError(f"HeyGen video generation failed: {message}")
+        time.sleep(HEYGEN_POLL_INTERVAL)
+    raise RuntimeError(f"HeyGen video generation timed out for {video_id}")
+
+
+def download_url(url, target):
+    with request.urlopen(url, timeout=300) as response:
+        target.write_bytes(response.read())
+
+
+def parse_scene_indices(value):
+    indices = set()
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        indices.add(int(part))
+    return indices
+
+
 def srt_time(seconds):
     ms = int(round(seconds * 1000))
     h, rem = divmod(ms, 3_600_000)
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+
+def write_srt(scenes, scene_durations, path):
+    now = 0.0
+    blocks = []
+    for idx, (scene, dur) in enumerate(zip(scenes, scene_durations), 1):
+        blocks.append(f"{idx}\n{srt_time(now)} --> {srt_time(now + dur)}\n{scene['caption']}\n")
+        now += dur
+    path.write_text("\n".join(blocks), encoding="utf-8")
+
+
+def render_slide_motion_clip(frame, duration_seconds, target, index):
+    frames = max(1, int(round(duration_seconds * FPS)))
+    if index % 2 == 0:
+        x_expr = f"(iw-iw/zoom)*on/{frames}"
+    else:
+        x_expr = f"(iw-iw/zoom)*(1-on/{frames})"
+    vf = (
+        "scale=2200:-1,"
+        f"zoompan=z='min(zoom+0.00042,1.045)':x='{x_expr}':"
+        f"y='ih/2-(ih/zoom/2)':d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
+        "setsar=1,format=yuv420p"
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            str(frame),
+            "-vf",
+            vf,
+            "-frames:v",
+            str(frames),
+            "-r",
+            str(FPS),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "19",
+            "-pix_fmt",
+            "yuv420p",
+            str(target),
+        ],
+        check=True,
+    )
+
+
+def render_slideshow_video(scene_durations, wav_audio, frame_dir):
+    total = sum(scene_durations)
+    concat = OUT / "concat.txt"
+    silent = OUT / "silent.mp4"
+    bgm = OUT / "bgm.wav"
+    mixed = OUT / "mixed.m4a"
+    video = OUT / "final.mp4"
+    if SLIDE_MOTION_ENABLED:
+        clip_dir = OUT / "slide_clips"
+        clip_dir.mkdir(exist_ok=True)
+        clips = []
+        for idx, dur in enumerate(scene_durations):
+            clip = clip_dir / f"scene-{idx + 1:02}.mp4"
+            render_slide_motion_clip(frame_dir / f"scene-{idx + 1:02}.jpg", dur, clip, idx)
+            clips.append(clip)
+        concat.write_text("\n".join(f"file '{clip.resolve()}'" for clip in clips), encoding="utf-8")
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(silent)], check=True)
+    else:
+        lines = []
+        for idx, dur in enumerate(scene_durations):
+            lines += [f"file '{frame_dir / f'scene-{idx + 1:02}.jpg'}'", f"duration {dur:.3f}"]
+        lines.append(f"file '{frame_dir / f'scene-{len(scene_durations):02}.jpg'}'")
+        concat.write_text("\n".join(lines), encoding="utf-8")
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-vf", f"scale={WIDTH}:{HEIGHT},format=yuv420p", "-r", str(FPS), "-c:v", "libx264", "-crf", "19", str(silent)], check=True)
+    if BGM_ENABLED:
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=82:sample_rate=48000:duration={total + 1}", "-filter_complex", "volume=0.010", str(bgm)], check=True)
+        subprocess.run(["ffmpeg", "-y", "-i", str(wav_audio), "-i", str(bgm), "-filter_complex", "[0:a]volume=1.0[a0];[1:a]volume=0.03[a1];[a0][a1]amix=inputs=2:duration=first", "-c:a", "aac", "-b:a", "192k", str(mixed)], check=True)
+    else:
+        subprocess.run(["ffmpeg", "-y", "-i", str(wav_audio), "-c:a", "aac", "-b:a", "192k", str(mixed)], check=True)
+    subprocess.run(["ffmpeg", "-y", "-i", str(silent), "-i", str(mixed), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(video)], check=True)
+    return video
+
+
+def render_local_scene_clip(frame, audio, duration_seconds, target):
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-t",
+            f"{duration_seconds:.3f}",
+            "-i",
+            str(frame),
+            "-i",
+            str(audio),
+            "-vf",
+            f"scale={WIDTH}:{HEIGHT},format=yuv420p",
+            "-r",
+            str(FPS),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "19",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(target),
+        ],
+        check=True,
+    )
+
+
+def transcode_scene_clip(source, target):
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-vf",
+            f"scale={WIDTH}:{HEIGHT},fps={FPS},format=yuv420p",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "19",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+            str(target),
+        ],
+        check=True,
+    )
+
+
+def render_heygen_scene(scene, index, frame, audio, expected_duration, out_dir):
+    raw_video = out_dir / f"scene-{index:02}-heygen-raw.mp4"
+    normalized = out_dir / f"scene-{index:02}-heygen.mp4"
+    if normalized.exists():
+        validate_video_quality(normalized, expected_duration)
+        return normalized
+
+    image_asset_id = heygen_upload_asset(frame)
+    audio_asset_id = heygen_upload_asset(audio)
+    payload = {
+        "type": "image",
+        "image": {"type": "asset_id", "asset_id": image_asset_id},
+        "audio_asset_id": audio_asset_id,
+        "title": f"{scene['title_en']} scene {index:02}",
+        "resolution": HEYGEN_RESOLUTION,
+        "aspect_ratio": HEYGEN_ASPECT_RATIO,
+    }
+    data = heygen_json("POST", "/v3/videos", payload=payload, timeout=180)
+    video_id = _find_key(data, "video_id") or _find_key(data, "id")
+    if not video_id:
+        raise RuntimeError(f"HeyGen video creation did not return a video id: {data}")
+    video_url = heygen_poll_video(video_id)
+    download_url(video_url, raw_video)
+    validate_video_quality(raw_video, expected_duration)
+    transcode_scene_clip(raw_video, normalized)
+    validate_video_quality(normalized, expected_duration)
+    return normalized
+
+
+def apply_bgm_to_video(source, target, total_duration):
+    if not BGM_ENABLED:
+        if source != target:
+            shutil.copyfile(source, target)
+        return
+    bgm = OUT / "heygen_hybrid_bgm.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=82:sample_rate=48000:duration={total_duration + 1}",
+            "-filter_complex",
+            "volume=0.010",
+            str(bgm),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-i",
+            str(bgm),
+            "-filter_complex",
+            "[0:a]volume=1.0[a0];[1:a]volume=0.03[a1];[a0][a1]amix=inputs=2:duration=first[a]",
+            "-map",
+            "0:v:0",
+            "-map",
+            "[a]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(target),
+        ],
+        check=True,
+    )
+
+
+def render_heygen_hybrid_video(scenes, scene_wavs, scene_durations, frame_dir):
+    if not HEYGEN_ENABLED:
+        raise RuntimeError("HeyGen is disabled")
+    target_indices = parse_scene_indices(HEYGEN_SCENE_INDICES)
+    if not target_indices:
+        raise RuntimeError("HEYGEN_SCENE_INDICES is empty")
+
+    clip_dir = OUT / "heygen_clips"
+    clip_dir.mkdir(exist_ok=True)
+    concat = OUT / "heygen_concat.txt"
+    clips = []
+    replaced = 0
+    for idx, (scene, wav, dur) in enumerate(zip(scenes, scene_wavs, scene_durations), 1):
+        frame = frame_dir / f"scene-{idx:02}.jpg"
+        if idx in target_indices:
+            try:
+                clip = render_heygen_scene(scene, idx, frame, wav, dur, clip_dir)
+                replaced += 1
+                print(f"HeyGen scene {idx:02} accepted")
+            except Exception as exc:
+                print(f"HeyGen scene {idx:02} rejected; using original slide scene: {exc}")
+                clip = clip_dir / f"scene-{idx:02}-local.mp4"
+                render_local_scene_clip(frame, wav, dur, clip)
+        else:
+            clip = clip_dir / f"scene-{idx:02}-local.mp4"
+            if not clip.exists():
+                render_local_scene_clip(frame, wav, dur, clip)
+        clips.append(clip)
+
+    if replaced < HEYGEN_MIN_REPLACED_SCENES:
+        raise RuntimeError(f"Only {replaced} HeyGen scenes passed; required {HEYGEN_MIN_REPLACED_SCENES}")
+
+    concat.write_text("\n".join(f"file '{path.resolve()}'" for path in clips), encoding="utf-8")
+    without_bgm = OUT / "heygen_hybrid_no_bgm.mp4"
+    video = OUT / "final.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", str(without_bgm)],
+        check=True,
+    )
+    apply_bgm_to_video(without_bgm, video, sum(scene_durations))
+    validate_video_quality(video, sum(scene_durations), min_width=WIDTH, min_height=HEIGHT)
+    return video
 
 
 def render_video(topic, scenes):
@@ -729,37 +1318,19 @@ def render_video(topic, scenes):
     audio_concat = OUT / "audio_concat.txt"
     scene_wavs, scene_durations = synthesize_scene_narrations(scenes, OUT)
     concat_audio_files(scene_wavs, audio_concat, wav_audio)
-    total = sum(scene_durations)
 
     render_scene_images(scenes, raw_dir, frame_dir)
 
-    concat = OUT / "concat.txt"
-    lines = []
-    for idx, dur in enumerate(scene_durations):
-        lines += [f"file 'frames/scene-{idx + 1:02}.jpg'", f"duration {dur:.3f}"]
-    lines.append(f"file 'frames/scene-{len(scenes):02}.jpg'")
-    concat.write_text("\n".join(lines), encoding="utf-8")
-
     srt = OUT / "subtitles.srt"
-    now = 0.0
-    blocks = []
-    for idx, (scene, dur) in enumerate(zip(scenes, scene_durations), 1):
-        blocks.append(f"{idx}\n{srt_time(now)} --> {srt_time(now + dur)}\n{scene['caption']}\n")
-        now += dur
-    srt.write_text("\n".join(blocks), encoding="utf-8")
+    write_srt(scenes, scene_durations, srt)
 
-    silent = OUT / "silent.mp4"
-    bgm = OUT / "bgm.wav"
-    mixed = OUT / "mixed.m4a"
-    video = OUT / "final.mp4"
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-vf", f"scale={WIDTH}:{HEIGHT},format=yuv420p", "-r", str(FPS), "-c:v", "libx264", "-crf", "19", str(silent)], check=True)
-    if BGM_ENABLED:
-        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=82:sample_rate=48000:duration={total + 1}", "-filter_complex", "volume=0.010", str(bgm)], check=True)
-        subprocess.run(["ffmpeg", "-y", "-i", str(wav_audio), "-i", str(bgm), "-filter_complex", "[0:a]volume=1.0[a0];[1:a]volume=0.03[a1];[a0][a1]amix=inputs=2:duration=first", "-c:a", "aac", "-b:a", "192k", str(mixed)], check=True)
-    else:
-        subprocess.run(["ffmpeg", "-y", "-i", str(wav_audio), "-c:a", "aac", "-b:a", "192k", str(mixed)], check=True)
-    subprocess.run(["ffmpeg", "-y", "-i", str(silent), "-i", str(mixed), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(video)], check=True)
-    return video, srt
+    if HEYGEN_ENABLED:
+        try:
+            return render_heygen_hybrid_video(scenes, scene_wavs, scene_durations, frame_dir), srt
+        except Exception as exc:
+            print(f"HeyGen hybrid render was not accepted; falling back to original renderer: {exc}")
+
+    return render_slideshow_video(scene_durations, wav_audio, frame_dir), srt
 
 
 def youtube_service():
@@ -785,11 +1356,12 @@ def upload(topic, video, srt):
     while response is None:
         _, response = req.next_chunk()
     video_id = response["id"]
-    service.captions().insert(
-        part="snippet",
-        body={"snippet": {"videoId": video_id, "language": "ko", "name": "Korean", "isDraft": False}},
-        media_body=MediaFileUpload(str(srt), mimetype="application/x-subrip"),
-    ).execute()
+    if UPLOAD_YOUTUBE_CAPTIONS:
+        service.captions().insert(
+            part="snippet",
+            body={"snippet": {"videoId": video_id, "language": "ko", "name": "Korean", "isDraft": False}},
+            media_body=MediaFileUpload(str(srt), mimetype="application/x-subrip"),
+        ).execute()
     print(f"Uploaded: https://www.youtube.com/watch?v={video_id}")
     return video_id
 

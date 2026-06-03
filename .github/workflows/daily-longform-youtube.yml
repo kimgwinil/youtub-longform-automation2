@@ -26,8 +26,13 @@ jobs:
       ELEVENLABS_SPEED: "1.0"
       ELEVENLABS_TEXT_NORMALIZATION: "on"
       ELEVENLABS_SEED: "20260601"
+      HEYGEN_ENABLED: "false"
       ENABLE_BGM: "false"
       ENABLE_SLIDE_CAPTIONS: "false"
+      ENABLE_SLIDE_MOTION: "false"
+      BURN_IN_SUBTITLES: "true"
+      UPLOAD_YOUTUBE_CAPTIONS: "false"
+      IMAGE_PROVIDER: gemini
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -35,8 +40,9 @@ jobs:
       OPENAI_IMAGE_SIZE: 1536x1024
       OPENAI_IMAGE_QUALITY: medium
       OPENAI_TEXT_MODEL: gpt-4o-mini
+      GEMINI_TEXT_MODEL: gemini-2.5-flash
       GEMINI_IMAGE_MODEL: gemini-2.5-flash-image
-      SCENE_IMAGE_MAX_WORKERS: "4"
+      SCENE_IMAGE_MAX_WORKERS: "2"
       YOUTUBE_PRIVACY: public
 
     steps:

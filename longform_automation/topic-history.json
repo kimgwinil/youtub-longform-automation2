@@ -134,5 +134,45 @@
     "automated": true,
     "video_id": "YIqXATIyqpM",
     "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "topic": "한국의 전통 음식과 현대의 융합",
+    "title": "전통과 현대의 만남: 한국의 퓨전 음식 탐구",
+    "created_at": "2026-06-03T09:19:17",
+    "automated": true,
+    "video_id": "typ3xo8F9L0",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "topic": "지속 가능한 패션: 환경을 보호하는 스마트한 소비",
+    "title": "지속 가능한 패션: 환경을 위한 스마트한 소비 방법",
+    "created_at": "2026-06-03T10:06:57",
+    "automated": true,
+    "video_id": "IvT2Siz9Daw",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "topic": "문화 이해: 한국의 전통 의복과 현대 패션의 조화",
+    "title": "전통과 현대가 만나다: 한복과 현대 패션의 조화",
+    "created_at": "2026-06-03T10:12:40",
+    "automated": true,
+    "video_id": "7lfdGVnGO1g",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "topic": "사회적 고립의 원인과 해결 방안",
+    "title": "현대 사회에서의 고립: 원인과 해결책",
+    "created_at": "2026-06-03T10:31:24",
+    "automated": true,
+    "video_id": "A_A8Az7FKaw",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "topic": "가정에서 쓰레기 분리배출을 효율적으로 하는 방법",
+    "title": "똑똑한 분리배출: 가정에서 쓰레기 분리하는 스마트한 방법",
+    "created_at": "2026-06-03T10:49:20",
+    "automated": true,
+    "video_id": "SVBqM6Afa24",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
   }
 ]
