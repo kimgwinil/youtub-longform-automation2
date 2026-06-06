@@ -1,18 +1,16 @@
-# korean-longform-automation
+# youtub-longform-automation
 
-Independent Korean longform YouTube automation workflows.
+Korean life information longform YouTube automation workflow.
 
-This repository is the longform workspace. Keep short-form quotes, sayings, and Shorts-specific assets in the separate Shorts repository so schedules, history files, and generated outputs do not overlap.
+This repository is the life-information longform workspace. Keep short-form quotes, sayings, and medical common-sense longform content in their separate repositories so schedules, history files, and generated outputs do not overlap.
 
 ## Scheduled workflows
 
-- Korean life information longform: `.github/workflows/daily-korean-life-longform.yml`, every day at 05:17 KST.
-- Medical common-sense longform: `.github/workflows/daily-medical-common-sense-longform.yml`, every day at 06:17 KST.
+- Korean life information longform: `.github/workflows/daily-korean-life-longform.yml`, every day at 05:10 KST.
 
 Each workflow writes to its own topic history file:
 
 - `longform_automation/topic-history-life.json`
-- `longform_automation/topic-history-medical.json`
 
 Both workflows run `longform_automation/daily_longform_upload_v2.py`; the topic category is selected with `LONGFORM_TOPIC_CATEGORY`.
 
