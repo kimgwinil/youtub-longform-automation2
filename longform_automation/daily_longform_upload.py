@@ -306,7 +306,8 @@ def generate_narrations(topic):
         "규칙:\n"
         "- 도입 방식, 문장 구조, 표현을 주제에 맞게 완전히 새롭게 작성할 것\n"
         "- 고정 반복 표현 절대 금지 — 매 영상이 같은 패턴처럼 들리면 안 됩니다\n"
-        "- 각 나레이션은 2~3문장, 자연스럽고 생동감 있는 한국어로 작성\n\n"
+        "- 각 나레이션은 3~5문장, 한 장면당 반드시 150자 이상으로 작성 (짧으면 반려)\n"
+        "- 영상 전체 나레이션이 낭독 시 3분 이상이 되도록 각 장면을 충분히 길게 쓸 것\n\n"
         "장면 품질 규칙:\n"
         "- 각 장면은 서로 다른 상황, 장소, 행동을 말해야 합니다\n"
         "- 추상적인 말만 하지 말고, 화면에 보일 수 있는 사람·사물·행동을 포함하세요\n"
@@ -400,33 +401,57 @@ def _build_scenes_fallback(topic):
     return scenes
 
 
+_MIN_NARRATION_CHARS_PER_SCENE = 130
+_MIN_TOTAL_NARRATION_CHARS = _MIN_NARRATION_CHARS_PER_SCENE * 17  # ~2210
+
+
+def _narrations_to_scenes(topic, data):
+    scenes = []
+    for index, item in enumerate(data):
+        title = item["title"]
+        title_en = item.get("title_en") or LAYOUT_TITLES_EN[index]
+        narration = item["narration"]
+        scenes.append({
+            "topic_id": topic["id"],
+            "title": title,
+            "title_en": title_en,
+            "caption": _first_sentence(narration),
+            "narration": narration,
+            "visual": (
+                f"{topic['subject']}. Scene focus: {title_en}. "
+                f"Represent this Korean narration literally and clearly: {narration} "
+                "Show a clear visual situation that matches this exact scene, with relevant people, objects, and actions fully visible. "
+                "Use a different composition from other scenes and keep the subject away from all edges. "
+                "No text, no logos, no watermark."
+            ),
+            "provider": scene_image_provider(index),
+        })
+    return scenes
+
+
 def build_scenes(topic):
-    try:
-        data = generate_narrations(topic)
-        scenes = []
-        for index, item in enumerate(data):
-            title = item["title"]
-            title_en = item.get("title_en") or LAYOUT_TITLES_EN[index]
-            narration = item["narration"]
-            scenes.append({
-                "topic_id": topic["id"],
-                "title": title,
-                "title_en": title_en,
-                "caption": _first_sentence(narration),
-                "narration": narration,
-                "visual": (
-                    f"{topic['subject']}. Scene focus: {title_en}. "
-                    f"Represent this Korean narration literally and clearly: {narration} "
-                    "Show a clear visual situation that matches this exact scene, with relevant people, objects, and actions fully visible. "
-                    "Use a different composition from other scenes and keep the subject away from all edges. "
-                    "No text, no logos, no watermark."
-                ),
-                "provider": scene_image_provider(index),
-            })
-        return scenes
-    except Exception as exc:
-        print(f"AI narration generation failed; using fallback template: {exc}")
-        return _build_scenes_fallback(topic)
+    for attempt in range(2):
+        try:
+            data = generate_narrations(topic)
+            total_chars = sum(len(item.get("narration", "")) for item in data)
+            short = [i + 1 for i, item in enumerate(data) if len(item.get("narration", "")) < _MIN_NARRATION_CHARS_PER_SCENE]
+            if total_chars < _MIN_TOTAL_NARRATION_CHARS or short:
+                msg = (
+                    f"Narrations too short: total {total_chars} chars "
+                    f"(need {_MIN_TOTAL_NARRATION_CHARS}), short scenes: {short}"
+                )
+                if attempt == 0:
+                    print(f"[build_scenes] {msg} — retrying with stricter prompt")
+                    raise RuntimeError(msg)
+                print(f"[build_scenes] WARNING: {msg} — using anyway (attempt 2)")
+            return _narrations_to_scenes(topic, data)
+        except Exception as exc:
+            if attempt == 0:
+                print(f"AI narration generation attempt 1 failed: {exc}")
+                continue
+            print(f"AI narration generation failed on both attempts; using fallback template: {exc}")
+            return _build_scenes_fallback(topic)
+    return _build_scenes_fallback(topic)
 
 
 def font(size):
@@ -1428,8 +1453,10 @@ def main():
     scenes = build_scenes(topic)
     video, srt = render_video(topic, scenes)
     video_duration = duration(video)
-    if not 180 <= video_duration <= 480:
-        raise RuntimeError(f"Generated video duration is outside 3-8 minutes: {video_duration:.1f}s")
+    if video_duration < 120 or video_duration > 540:
+        raise RuntimeError(f"Generated video duration is outside acceptable range: {video_duration:.1f}s")
+    if video_duration < 180:
+        print(f"[main] WARNING: video duration {video_duration:.1f}s is below the ideal 3-minute target — uploading anyway")
     video_id = upload(topic, video, srt)
     history.append({
         "category": TOPIC_CATEGORY,
