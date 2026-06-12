@@ -121,11 +121,20 @@ def _generate_topic_gemini(used_topics):
 
 def generate_topic(history):
     used_topics = [x.get("topic", "") for x in history if x.get("topic")]
-    try:
-        return _generate_topic_openai(used_topics)
-    except Exception as exc:
-        print(f"OpenAI topic generation failed; falling back to Gemini: {exc}")
-        return _generate_topic_gemini(used_topics)
+    max_retries = 5
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return _generate_topic_openai(used_topics)
+        except Exception as exc:
+            print(f"OpenAI topic generation attempt {attempt} failed: {exc}")
+            last_exc = exc
+        try:
+            return _generate_topic_gemini(used_topics)
+        except Exception as exc:
+            print(f"Gemini topic generation attempt {attempt} failed: {exc}")
+            last_exc = exc
+    raise RuntimeError(f"Topic generation failed after {max_retries} attempts: {last_exc}")
 
 
 def pick_topic(history):
