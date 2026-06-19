@@ -507,6 +507,17 @@ def generate_gemini(prompt, path):
     raise RuntimeError("All Gemini image models failed: " + " | ".join(errors))
 
 
+def generate_image_with_fallback(provider, prompt, path):
+    if provider == "openai":
+        generate_openai(prompt, path)
+        return
+    try:
+        generate_gemini(prompt, path)
+    except Exception as exc:
+        print(f"Gemini image generation failed; falling back to OpenAI image: {exc}")
+        generate_openai(prompt, path)
+
+
 def fit_cover(path):
     img = Image.open(path).convert("RGB")
     target = WIDTH / HEIGHT
@@ -813,10 +824,7 @@ def render_scene_image(scene, index, total, raw_dir, frame_dir):
     if raw.exists() and raw.stat().st_size == 0:
         raw.unlink()
     if not raw.exists():
-        if scene["provider"] == "openai":
-            generate_openai(prompt, raw)
-        else:
-            generate_gemini(prompt, raw)
+        generate_image_with_fallback(scene["provider"], prompt, raw)
     img = compose_slide_background(raw, index % 5).convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -894,6 +902,19 @@ def macos_say_tts(text, path):
     aiff.unlink(missing_ok=True)
 
 
+def openai_tts(text, path):
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=float(os.getenv("OPENAI_TTS_TIMEOUT", "180")))
+    response = client.audio.speech.create(
+        model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+        voice=os.getenv("OPENAI_TTS_VOICE", "alloy"),
+        input=text,
+        response_format="mp3",
+    )
+    path.write_bytes(response.read())
+
+
 def synthesize_tts(text, path):
     errors = []
     for voice_id in tts_voice_ids():
@@ -904,6 +925,12 @@ def synthesize_tts(text, path):
         except Exception as exc:
             errors.append(f"{voice_id}: {exc}")
             print(f"ElevenLabs TTS failed for voice {voice_id}: {exc}")
+    try:
+        openai_tts(text, path)
+        print("TTS complete with OpenAI fallback")
+        return
+    except Exception as exc:
+        errors.append(f"OpenAI TTS: {exc}")
     try:
         macos_say_tts(text, path)
         print("TTS complete with macOS say fallback")
