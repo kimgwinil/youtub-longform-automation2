@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 
@@ -50,7 +51,11 @@ def generate_gemini_with_fallback(prompt, path):
             raise RuntimeError("Gemini returned an empty image")
     except Exception as exc:
         print(f"Gemini image generation failed; falling back to OpenAI: {exc}")
-        _generate_openai(prompt, path)
+        try:
+            _generate_openai(prompt, path)
+        except Exception as fallback_exc:
+            print(f"OpenAI image fallback failed; using local visual fallback: {fallback_exc}")
+            _generate_local_visual(prompt, path)
 
 
 def generate_openai_with_fallback(prompt, path):
@@ -58,7 +63,44 @@ def generate_openai_with_fallback(prompt, path):
         _generate_openai(prompt, path)
     except Exception as exc:
         print(f"OpenAI image generation failed; falling back to Gemini: {exc}")
-        _generate_gemini(prompt, path)
+        try:
+            _generate_gemini(prompt, path)
+        except Exception as fallback_exc:
+            print(f"Gemini image fallback failed; using local visual fallback: {fallback_exc}")
+            _generate_local_visual(prompt, path)
+
+
+def _generate_local_visual(prompt, path):
+    digest = hashlib.sha256(prompt.encode("utf-8", errors="ignore")).digest()
+    palettes = [
+        ((24, 35, 55), (31, 86, 104), (235, 198, 103)),
+        ((33, 38, 32), (87, 114, 84), (230, 214, 162)),
+        ((44, 39, 64), (95, 87, 141), (239, 196, 138)),
+        ((26, 50, 67), (77, 126, 138), (238, 220, 170)),
+    ]
+    bg_a, bg_b, accent = palettes[digest[0] % len(palettes)]
+    small_w, small_h = 320, 180
+    img = base.Image.new("RGB", (small_w, small_h), bg_a)
+    pixels = img.load()
+    for y in range(small_h):
+        t = y / max(1, small_h - 1)
+        row = tuple(int(bg_a[i] * (1 - t) + bg_b[i] * t) for i in range(3))
+        for x in range(small_w):
+            pixels[x, y] = row
+    draw = base.ImageDraw.Draw(img, "RGBA")
+    for i in range(10):
+        cx = 20 + ((digest[i] * 7 + i * 31) % (small_w - 40))
+        cy = 18 + ((digest[i + 10] * 5 + i * 19) % (small_h - 36))
+        r = 16 + digest[i + 20] % 38
+        color = (*accent, 34 + digest[i + 30] % 54)
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=color)
+    for i in range(4):
+        y = 30 + i * 32 + digest[i + 2] % 12
+        draw.line((28, y, small_w - 28, y + digest[i + 6] % 18 - 9), fill=(*accent, 62), width=2)
+    img = img.resize((base.WIDTH, base.HEIGHT), base.Image.Resampling.BICUBIC)
+    img = img.filter(base.ImageFilter.GaussianBlur(radius=1.1))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
 
 
 def _parse_and_validate_topic(raw, used_topics):
