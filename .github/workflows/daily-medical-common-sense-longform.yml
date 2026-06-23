@@ -50,6 +50,8 @@ jobs:
       OPENAI_TTS_VOICE: alloy
       GEMINI_TEXT_MODEL: gemini-2.5-flash
       GEMINI_IMAGE_MODEL: gemini-2.5-flash-image
+      GEMINI_TTS_MODEL: gemini-2.5-flash-preview-tts
+      GEMINI_TTS_VOICE: Kore
       SCENE_IMAGE_MAX_WORKERS: "2"
       YOUTUBE_PRIVACY: public
 
@@ -101,4 +103,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add longform_automation/topic-history-medical.json
           git diff --cached --quiet || git commit -m "Record medical common sense longform topic"
+          git pull --rebase origin "$GITHUB_REF_NAME"
           git push
