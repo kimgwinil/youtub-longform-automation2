@@ -38,7 +38,7 @@ jobs:
       ENABLE_SLIDE_MOTION: "false"
       BURN_IN_SUBTITLES: "true"
       UPLOAD_YOUTUBE_CAPTIONS: "false"
-      IMAGE_PROVIDER: openai
+      IMAGE_PROVIDER: gemini
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}

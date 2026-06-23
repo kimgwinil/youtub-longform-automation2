@@ -228,14 +228,14 @@ def generate_topic(history):
     last_exc = None
     for attempt in range(1, max_retries + 1):
         try:
-            return _generate_topic_openai(used_topics)
-        except Exception as exc:
-            print(f"OpenAI topic generation attempt {attempt} failed: {exc}")
-            last_exc = exc
-        try:
             return _generate_topic_gemini(used_topics)
         except Exception as exc:
             print(f"Gemini topic generation attempt {attempt} failed: {exc}")
+            last_exc = exc
+        try:
+            return _generate_topic_openai(used_topics)
+        except Exception as exc:
+            print(f"OpenAI topic generation attempt {attempt} failed: {exc}")
             last_exc = exc
     try:
         return _manual_topic_fallback(used_topics)
