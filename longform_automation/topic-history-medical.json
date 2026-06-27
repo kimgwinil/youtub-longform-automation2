@@ -214,5 +214,14 @@
     "automated": true,
     "video_id": "10ybTKHz7yQ",
     "voice_id": "yFhtTlnagRJxbEs8yUYt"
+  },
+  {
+    "category": "medical",
+    "topic": "식중독 예방을 위한 주방 위생 관리",
+    "title": "우리 집 식중독 제로! 주방 위생의 모든 것",
+    "created_at": "2026-06-27T22:22:58",
+    "automated": true,
+    "video_id": "ShsSQC4wX8g",
+    "voice_id": "yFhtTlnagRJxbEs8yUYt"
   }
 ]
