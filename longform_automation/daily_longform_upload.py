@@ -329,7 +329,7 @@ def generate_narrations(topic):
         "14.지금 당장 할 일 15.작은 실험 제안 16.최종 점검 17.결론"
     )
     response = client.models.generate_content(
-        model=os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash"),
+        model=os.getenv("GEMINI_TEXT_MODEL", "gemini-3.6-flash"),
         contents=prompt,
     )
     raw = response.text.strip()
