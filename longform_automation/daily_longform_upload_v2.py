@@ -92,7 +92,7 @@ def _generate_local_visual(prompt, path):
         cx = 20 + ((digest[i] * 7 + i * 31) % (small_w - 40))
         cy = 18 + ((digest[i + 10] * 5 + i * 19) % (small_h - 36))
         r = 16 + digest[i + 20] % 38
-        color = (*accent, 34 + digest[i + 30] % 54)
+        color = (*accent, 34 + digest[(i + 30) % len(digest)] % 54)
         draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=color)
     for i in range(4):
         y = 30 + i * 32 + digest[i + 2] % 12
